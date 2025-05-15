@@ -10,7 +10,7 @@ export default tseslint.config(
   ...tseslint.configs.recommendedTypeChecked,
 
   {
-    files: ["battleship-server/**/*.ts"],
+    files: ["backend/**/*.ts"],
     languageOptions: {
       parser: tseslint.parser,
       parserOptions: {
@@ -31,7 +31,6 @@ export default tseslint.config(
         { varsIgnorePattern: "^_", argsIgnorePattern: "^_" },
       ],
       "@typescript-eslint/no-explicit-any": "warn",
-      "no-console": "warn",
     },
   }
 );
