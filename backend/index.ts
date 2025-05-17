@@ -1,10 +1,19 @@
 import { WebSocketServer, WebSocket } from "ws";
-import { ClientCommand, ErrorResponseData, ServerMessage } from "./types.js";
+import { WebSocket as OriginalWebSocket } from "ws";
+import {
+  ClientCommand,
+  ErrorResponseData,
+  ExtendedWebSocket,
+  ServerMessage,
+  RoomPlayerInfo,
+} from "./types.js";
 import * as userManager from "./user/userManager.js";
+import * as roomManager from "./room/roomManager.js";
 import {
   isRegPayload,
   isValidClientCommandStructure,
 } from "./utils/typeguards.js";
+import { IncomingMessage } from "http";
 
 const PORT: number = 8080;
 const wss = new WebSocketServer({ port: PORT });
@@ -32,9 +41,9 @@ export function broadcast(messageData: { type: string; data: unknown; id: 0 }) {
   });
 }
 
-wss.on("connection", (ws: WebSocket, request) => {
-  const clientIp = request.socket.remoteAddress;
-  console.log(`Client connected: ${clientIp}`);
+wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
+  const extendedWs = ws as ExtendedWebSocket;
+  extendedWs.clientIp = request.socket.remoteAddress || "unknown IP";
 
   ws.send(
     JSON.stringify({
@@ -46,7 +55,7 @@ wss.on("connection", (ws: WebSocket, request) => {
   ws.send(
     JSON.stringify({
       type: "update_room",
-      data: JSON.stringify([]),
+      data: JSON.stringify(roomManager.getAvailableRooms()),
       id: 0,
     } as ServerMessage)
   );
@@ -63,7 +72,9 @@ wss.on("connection", (ws: WebSocket, request) => {
     let command: ClientCommand;
     let responseData: unknown = {};
     let responseType: string;
+    let requiresGlobalRoomUpdate = false;
     let requiresGlobalUpdate = false;
+    const authenticatedUserId: string | undefined = extendedWs.userId;
 
     try {
       const parsedJson: unknown = JSON.parse(messageString);
@@ -72,13 +83,13 @@ wss.on("connection", (ws: WebSocket, request) => {
         command = parsedJson;
       } else {
         console.error(
-          `Invalid command structure from ${clientIp}: ${messageString.substring(0, 200)}`
+          `Invalid command structure from ${extendedWs.clientIp}: ${messageString.substring(0, 200)}`
         );
 
         throw new Error("Invalid message structure from client.");
       }
       console.log(
-        `[COMMAND RECEIVED] Type: ${command.type}, Data: ${JSON.stringify(command.data || {})}, Client: ${clientIp}`
+        `[COMMAND RECEIVED] Type: ${command.type}, Data: ${JSON.stringify(command.data || {})}, Client: ${extendedWs.clientIp}`
       );
       responseType = command.type;
 
@@ -97,7 +108,7 @@ wss.on("connection", (ws: WebSocket, request) => {
                 errorText: "Invalid JSON format in 'reg' command data.",
               } as ErrorResponseData;
               console.warn(
-                `Invalid JSON in 'reg' data string from client ${clientIp}, data string: "${command.data}"`
+                `Invalid JSON in 'reg' data string from client ${extendedWs.clientIp}, data string: "${command.data}"`
               );
               parsingCorrect = false;
             }
@@ -108,7 +119,7 @@ wss.on("connection", (ws: WebSocket, request) => {
               errorText: "Data for 'reg' command should be a JSON string.",
             } as ErrorResponseData;
             console.warn(
-              `Data for 'reg' command was not a string from client ${clientIp}, received: ${JSON.stringify(command.data)}`
+              `Data for 'reg' command was not a string from client ${extendedWs.clientIp}, received: ${JSON.stringify(command.data)}`
             );
             parsingCorrect = false;
           }
@@ -125,7 +136,9 @@ wss.on("connection", (ws: WebSocket, request) => {
                 !registrationResult.error &&
                 registrationResult.index
               ) {
+                extendedWs.userId = registrationResult.index;
                 requiresGlobalUpdate = true;
+                requiresGlobalRoomUpdate = true;
               }
             } else {
               responseType = "error";
@@ -135,10 +148,53 @@ wss.on("connection", (ws: WebSocket, request) => {
                   "Invalid data structure in 'reg' command payload after parsing.",
               } as ErrorResponseData;
               console.warn(
-                `Invalid data structure in 'reg' payload from client ${clientIp}, parsed data: ${JSON.stringify(regPayloadObject)}`
+                `Invalid data structure in 'reg' payload from client ${extendedWs.clientIp}, parsed data: ${JSON.stringify(regPayloadObject)}`
               );
             }
           }
+
+          break;
+        }
+
+        case "create_room": {
+          if (!authenticatedUserId) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText:
+                "User is not authenticated. Please register or login first.",
+            } as ErrorResponseData;
+            console.warn(
+              `[RoomManager] Attempt to create room by unauthenticated user ${extendedWs.clientIpAddress}`
+            );
+            break;
+          }
+
+          const playerCreatingRoom =
+            userManager.getUserById(authenticatedUserId);
+
+          if (!playerCreatingRoom) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "Authenticated user not found in user database.",
+            } as ErrorResponseData;
+            console.error(
+              `[RoomManager] Authenticated user ${authenticatedUserId} not found in DB for create_room!`
+            );
+            break;
+          }
+
+          const roomPlayer: RoomPlayerInfo = {
+            playerId: playerCreatingRoom.userId,
+            name: playerCreatingRoom.name,
+          };
+
+          const newRoom = roomManager.createNewRoom(roomPlayer);
+          console.log(
+            `[RoomManager] Player ${playerCreatingRoom.name} created room ${newRoom.roomId}`
+          );
+          requiresGlobalRoomUpdate = true;
           break;
         }
 
@@ -149,7 +205,7 @@ wss.on("connection", (ws: WebSocket, request) => {
             errorText: `Unknown command type: '${command.type}'`,
           } as ErrorResponseData;
           console.warn(
-            `Unknown command type: '${command.type}' from client ${clientIp}`
+            `Unknown command type: '${command.type}' from client ${extendedWs.clientIp}`
           );
       }
 
@@ -161,7 +217,7 @@ wss.on("connection", (ws: WebSocket, request) => {
 
       ws.send(JSON.stringify(finalResponse));
       console.log(
-        `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data}, Client: ${clientIp}`
+        `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data}, Client: ${extendedWs.clientIp}`
       );
 
       if (requiresGlobalUpdate) {
@@ -169,7 +225,14 @@ wss.on("connection", (ws: WebSocket, request) => {
           type: "update_winners",
           data: userManager.getWinnersList(),
           id: 0,
-        } as unknown as ServerMessage);
+        });
+      }
+      if (requiresGlobalRoomUpdate) {
+        broadcast({
+          type: "update_room",
+          data: roomManager.getAvailableRooms(),
+          id: 0,
+        });
       }
     } catch (error: unknown) {
       let errorMessage = "Failed to process command or invalid JSON.";
@@ -177,7 +240,7 @@ wss.on("connection", (ws: WebSocket, request) => {
         errorMessage = error.message;
       }
       console.error(
-        `Error processing message from ${clientIp}: "${messageString.substring(0, 200)}" \nOriginal Error: ${errorMessage}`,
+        `Error processing message from ${extendedWs.clientIp}: "${messageString.substring(0, 200)}" \nOriginal Error: ${errorMessage}`,
         error
       );
 
@@ -193,35 +256,43 @@ wss.on("connection", (ws: WebSocket, request) => {
       };
       ws.send(JSON.stringify(errorResponse));
       console.log(
-        `[RESPONSE SENT - ERROR] Data: ${JSON.stringify(errorResponse.data)}, Client: ${clientIp}`
+        `[RESPONSE SENT - ERROR] Data: ${JSON.stringify(errorResponse.data)}, Client: ${extendedWs.clientIp}`
       );
     }
   });
 
   ws.on("close", () => {
+    console.log(`Client ${extendedWs.clientIp} disconnected.`);
     const { disconnectedUserName } = userManager.handleUserDisconnect(ws);
     if (disconnectedUserName) {
       console.log(
-        `User ${disconnectedUserName} (${clientIp}) actions on disconnect processed.`
+        `User ${disconnectedUserName} (${extendedWs.clientIp}) actions on disconnect processed.`
       );
       broadcast({
         type: "update_winners",
         data: userManager.getWinnersList(),
         id: 0,
       } as unknown as ServerMessage);
-      // broadcast({ type: 'update_room', data: roomManager.getAvailableRooms(), id: 0 } as ServerMessage);
+      broadcast({
+        type: "update_room",
+        data: roomManager.getAvailableRooms(),
+        id: 0,
+      } as unknown as ServerMessage);
     } else {
       console.log(
-        `Client ${clientIp} (unauthenticated) disconnected processing.`
+        `Client ${extendedWs.clientIp} (unauthenticated) disconnected processing.`
       );
     }
-    console.log(
-      `Client ${clientIp} disconnected. Needs full disconnect logic implemented.`
-    );
+    // console.log(
+    //   `Client ${clientIp} disconnected. Needs full disconnect logic implemented.`
+    // );
   });
 
   ws.on("error", (error) => {
-    console.error(`Error on WebSocket connection with ${clientIp}:`, error);
+    console.error(
+      `Error on WebSocket connection with ${extendedWs.clientIp}:`,
+      error
+    );
   });
 });
 

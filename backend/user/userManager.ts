@@ -1,5 +1,6 @@
 import { WebSocket } from "ws";
 import { randomUUID } from "node:crypto";
+import { RegResponseData } from "../types.js";
 
 export interface User {
   userId: string;
@@ -14,7 +15,7 @@ const activeConnections = new Map<string, WebSocket>();
 export const handleUserRegiatration = (
   ws: WebSocket,
   registrationData: { name: string; password: string }
-) => {
+): RegResponseData => {
   const { name, password } = registrationData;
   let existingUser: User | undefined;
 
@@ -29,21 +30,45 @@ export const handleUserRegiatration = (
   let error = false;
   let errorText = "";
 
-  if (existingUser) {
-    if (existingUser.password === password) {
-      userIdToReturn = existingUser.userId;
-      console.log(`User '${name}' (ID: ${userIdToReturn}) logged in.`);
-    } else {
-      error = true;
-      errorText = "Invalid password";
-      console.log(`Failed login attempt for user '${name}': Invalid password.`);
-    }
+  if (!name || name.trim() === "" || !password || password.trim() === "") {
+    error = true;
+    errorText = "Name and password cannot be empty or contain only spaces.";
+    console.log(
+      `Registration/login attempt failed for IP: Empty name or password. Name: "${name}", Password: "${password === "" || password.trim() === "" ? "<empty_or_spaces>" : "<provided>"}"`
+    );
   } else {
-    const newUserId = randomUUID();
-    const newUser: User = { userId: newUserId, name, password, wins: 0 };
-    users.set(newUserId, newUser);
-    userIdToReturn = newUserId;
-    console.log(`New user '${name}' (ID: ${userIdToReturn}) registered.`);
+    for (const user of users.values()) {
+      if (user.name === name) {
+        existingUser = user;
+        break;
+      }
+    }
+
+    if (existingUser) {
+      if (existingUser.password === password) {
+        userIdToReturn = existingUser.userId;
+        console.log(`User '${name}' (ID: ${userIdToReturn}) logged in.`);
+      } else {
+        error = true;
+        errorText = "Invalid password";
+        console.log(
+          `Failed login attempt for user '${name}': Invalid password.`
+        );
+      }
+    } else {
+      const newUserId = randomUUID();
+      const newUser: User = {
+        userId: newUserId,
+        name: name.trim(),
+        password: password,
+        wins: 0,
+      };
+      users.set(newUserId, newUser);
+      userIdToReturn = newUserId;
+      console.log(
+        `New user '${name.trim()}' (ID: ${userIdToReturn}) registered.`
+      );
+    }
   }
 
   if (userIdToReturn && !error) {
@@ -97,4 +122,8 @@ export function getWinnersList(): { name: string; wins: number }[] {
 
 export function getAllActiveSockets(): WebSocket[] {
   return Array.from(activeConnections.values());
+}
+
+export function getUserById(userId: string): User | undefined {
+  return users.get(userId);
 }

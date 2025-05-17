@@ -1,3 +1,4 @@
+import { WebSocket as OriginalWebSocket } from "ws";
 export interface ServerMessage {
   type: string;
   data: string;
@@ -25,4 +26,35 @@ export interface RegResponseData {
 export interface ErrorResponseData {
   error: boolean;
   errorText: string;
+}
+
+export interface RoomPlayerInfo {
+  playerId: string;
+  name: string;
+}
+
+export interface GameRoom {
+  roomId: string;
+  players: [RoomPlayerInfo | null, RoomPlayerInfo | null];
+}
+
+export interface UpdateRoomData {
+  roomId: string;
+  roomUsers: { name: string; index: string }[];
+}
+
+export interface CreateGameData {
+  idGame: string;
+  idPlayer: string;
+}
+
+export interface AddUserToRoomPayload {
+  indexRoom: string;
+}
+
+export interface ExtendedWebSocket extends OriginalWebSocket {
+  clientIpAddress: string;
+  clientIp?: string;
+
+  userId?: string;
 }
