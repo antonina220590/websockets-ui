@@ -6,10 +6,14 @@ import {
   ExtendedWebSocket,
   ServerMessage,
   RoomPlayerInfo,
+  GameRoom,
+  AddUserToRoomPayload,
+  CreateGameData,
 } from "./types.js";
 import * as userManager from "./user/userManager.js";
 import * as roomManager from "./room/roomManager.js";
 import {
+  isAddUserToRoomPayload,
   isRegPayload,
   isValidClientCommandStructure,
 } from "./utils/typeguards.js";
@@ -75,6 +79,8 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
     let requiresGlobalRoomUpdate = false;
     let requiresGlobalUpdate = false;
     const authenticatedUserId: string | undefined = extendedWs.userId;
+    let gameRoomForResponse: GameRoom | undefined;
+    let gameIdForResponse: string | undefined;
 
     try {
       const parsedJson: unknown = JSON.parse(messageString);
@@ -198,6 +204,91 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
           break;
         }
 
+        case "add_user_to_room": {
+          if (!authenticatedUserId) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "User is not authenticated.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          let payload: AddUserToRoomPayload | undefined;
+          if (typeof command.data === "string") {
+            try {
+              const parsedData: unknown = JSON.parse(command.data);
+              if (isAddUserToRoomPayload(parsedData)) {
+                payload = parsedData;
+              } else {
+                throw new Error(
+                  "Invalid payload structure for add_user_to_room."
+                );
+              }
+            } catch {
+              responseType = "error";
+              responseData = {
+                error: true,
+                errorText: "Invalid JSON or payload for add_user_to_room data.",
+              } as ErrorResponseData;
+              console.warn(
+                `[RoomManager] Invalid data for add_user_to_room from ${authenticatedUserId}: ${command.data}`
+              );
+              break;
+            }
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "Data for add_user_to_room must be a JSON string.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          if (!payload) break;
+
+          const joiningPlayer = userManager.getUserById(authenticatedUserId);
+          if (!joiningPlayer) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "Authenticated user not found.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          const roomPlayerInfo: RoomPlayerInfo = {
+            playerId: joiningPlayer.userId,
+            name: joiningPlayer.name,
+          };
+
+          const result = roomManager.addUserToExistingRoom(
+            payload.indexRoom,
+            roomPlayerInfo
+          );
+
+          if (result.success && result.room && result.gameId) {
+            console.log(
+              `[Game] Player ${joiningPlayer.name} successfully joined room ${result.room.roomId}. Game ${result.gameId} created.`
+            );
+            gameRoomForResponse = result.room;
+            gameIdForResponse = result.gameId;
+            requiresGlobalRoomUpdate = true;
+            responseType = "";
+            responseData = {};
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: result.error || "Failed to add user to room.",
+            } as ErrorResponseData;
+            console.warn(
+              `[RoomManager] Failed to add ${joiningPlayer.name} to room ${payload.indexRoom}: ${result.error}`
+            );
+          }
+          break;
+        }
+
         default:
           responseType = "error";
           responseData = {
@@ -209,16 +300,77 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
           );
       }
 
-      const finalResponse: ServerMessage = {
-        type: responseType,
-        data: JSON.stringify(responseData),
-        id: 0,
-      };
+      let shouldSendPersonalResponse = false;
 
-      ws.send(JSON.stringify(finalResponse));
-      console.log(
-        `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data}, Client: ${extendedWs.clientIp}`
-      );
+      if (responseType) {
+        if (responseType === "error" || command.type === "reg") {
+          shouldSendPersonalResponse = true;
+        } else if (
+          typeof responseData === "object" &&
+          responseData !== null &&
+          Object.keys(responseData).length > 0
+        ) {
+          shouldSendPersonalResponse = true;
+        }
+      }
+
+      if (shouldSendPersonalResponse) {
+        const finalResponse: ServerMessage = {
+          type: responseType!,
+          data: JSON.stringify(responseData),
+          id: 0,
+        };
+        extendedWs.send(JSON.stringify(finalResponse));
+        console.log(
+          `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data.substring(0, 100)}..., Client: ${extendedWs.clientIpAddress}`
+        );
+      }
+
+      if (
+        gameRoomForResponse &&
+        gameIdForResponse &&
+        gameRoomForResponse.players[0] &&
+        gameRoomForResponse.players[1]
+      ) {
+        const player1Id = gameRoomForResponse.players[0].playerId;
+        const player2Id = gameRoomForResponse.players[1].playerId;
+
+        const messageDataPlayer1: CreateGameData = {
+          idGame: gameIdForResponse,
+          idPlayer: player1Id,
+        };
+        const messageDataPlayer2: CreateGameData = {
+          idGame: gameIdForResponse,
+          idPlayer: player2Id,
+        };
+
+        const serverMessageP1: ServerMessage = {
+          type: "create_game",
+          data: JSON.stringify(messageDataPlayer1),
+          id: 0,
+        };
+        const serverMessageP2: ServerMessage = {
+          type: "create_game",
+          data: JSON.stringify(messageDataPlayer2),
+          id: 0,
+        };
+
+        const wsPlayer1 = userManager.getSocketByUserId(player1Id);
+        const wsPlayer2 = userManager.getSocketByUserId(player2Id);
+
+        if (wsPlayer1 && wsPlayer1.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer1.send(JSON.stringify(serverMessageP1));
+          console.log(
+            `[Game] Sent 'create_game' to player ${player1Id} for game ${gameIdForResponse}`
+          );
+        }
+        if (wsPlayer2 && wsPlayer2.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer2.send(JSON.stringify(serverMessageP2));
+          console.log(
+            `[Game] Sent 'create_game' to player ${player2Id} for game ${gameIdForResponse}`
+          );
+        }
+      }
 
       if (requiresGlobalUpdate) {
         broadcast({

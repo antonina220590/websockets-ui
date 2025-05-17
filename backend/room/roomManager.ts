@@ -48,3 +48,60 @@ export function createNewRoom(firstPlayer: RoomPlayerInfo): GameRoom {
   );
   return newRoom;
 }
+
+export function addUserToExistingRoom(
+  roomId: string,
+  secondPlayer: RoomPlayerInfo
+): { success: boolean; room?: GameRoom; gameId?: string; error?: string } {
+  const room = rooms.get(roomId);
+
+  if (!room) {
+    return { success: false, error: "Room not found." };
+  }
+
+  if (
+    room.players[0]?.playerId === secondPlayer.playerId ||
+    room.players[1]?.playerId === secondPlayer.playerId
+  ) {
+    console.warn(
+      `[RoomManager] Player ${secondPlayer.name} (ID: ${secondPlayer.playerId}) is already in room ${roomId}.`
+    );
+    if (
+      room.players[0]?.playerId === secondPlayer.playerId &&
+      room.players[1] === null
+    ) {
+      return {
+        success: false,
+        error: "Player is already the creator of this room.",
+      };
+    }
+    return { success: false, error: "Player is already in this room." };
+  }
+
+  if (room.players[0] && room.players[1]) {
+    return { success: false, error: "Room is already full." };
+  }
+
+  if (room.players[0] && !room.players[1]) {
+    room.players[1] = secondPlayer;
+    const gameId = randomUUID();
+    console.log(
+      `[RoomManager] Player ${secondPlayer.name} (ID: ${secondPlayer.playerId}) joined room ${roomId}. Game ID: ${gameId}`
+    );
+    rooms.set(roomId, room);
+    return { success: true, room: room, gameId: gameId };
+  } else if (!room.players[0]) {
+    console.error(
+      `[RoomManager] Attempted to add player to room ${roomId} which has no first player.`
+    );
+    return {
+      success: false,
+      error:
+        "Cannot add player, room is in an invalid state (no first player).",
+    };
+  }
+  return {
+    success: false,
+    error: "Failed to add player to room due to an unknown state.",
+  };
+}

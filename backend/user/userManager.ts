@@ -127,3 +127,7 @@ export function getAllActiveSockets(): WebSocket[] {
 export function getUserById(userId: string): User | undefined {
   return users.get(userId);
 }
+
+export function getSocketByUserId(userId: string): WebSocket | undefined {
+  return activeConnections.get(userId);
+}

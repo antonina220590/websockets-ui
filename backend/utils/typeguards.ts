@@ -1,4 +1,4 @@
-import { ClientCommand, RegPayload } from "../types.js";
+import { AddUserToRoomPayload, ClientCommand, RegPayload } from "../types.js";
 
 export function isValidClientCommandStructure(
   obj: unknown
@@ -21,4 +21,14 @@ export function isRegPayload(data: unknown): data is RegPayload {
   return (
     typeof payload.name === "string" && typeof payload.password === "string"
   );
+}
+
+export function isAddUserToRoomPayload(
+  data: unknown
+): data is AddUserToRoomPayload {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const payload = data as AddUserToRoomPayload;
+  return typeof payload.indexRoom === "string";
 }
