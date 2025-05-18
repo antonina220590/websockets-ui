@@ -9,6 +9,8 @@ import {
   GameRoom,
   AddUserToRoomPayload,
   CreateGameData,
+  AddShipsPayload,
+  StartGameData,
 } from "./types.js";
 import * as userManager from "./user/userManager.js";
 import * as roomManager from "./room/roomManager.js";
@@ -16,6 +18,7 @@ import {
   isAddUserToRoomPayload,
   isRegPayload,
   isValidClientCommandStructure,
+  isAddShipsPayload,
 } from "./utils/typeguards.js";
 import { IncomingMessage } from "http";
 
@@ -81,6 +84,7 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
     const authenticatedUserId: string | undefined = extendedWs.userId;
     let gameRoomForResponse: GameRoom | undefined;
     let gameIdForResponse: string | undefined;
+    let roomToStartGame: GameRoom | undefined;
 
     try {
       const parsedJson: unknown = JSON.parse(messageString);
@@ -289,6 +293,91 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
           break;
         }
 
+        case "add_ships": {
+          if (!authenticatedUserId) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "User is not authenticated.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          let payload: AddShipsPayload | undefined;
+          if (typeof command.data === "string") {
+            try {
+              const parsedData: unknown = JSON.parse(command.data);
+              if (isAddShipsPayload(parsedData)) {
+                payload = parsedData;
+              } else {
+                throw new Error("Invalid payload structure for add_ships.");
+              }
+            } catch (e: unknown) {
+              responseType = "error";
+              let errorMessage = "Invalid JSON or payload for add_ships data.";
+              if (e instanceof Error) {
+                errorMessage = `Invalid JSON or payload for add_ships data: ${e.message}`;
+              } else if (typeof e === "string") {
+                errorMessage = `Invalid JSON or payload for add_ships data: ${e}`;
+              }
+              responseData = {
+                error: true,
+                errorText: errorMessage,
+              } as ErrorResponseData;
+              console.warn(
+                `[Game] Invalid data for add_ships from ${authenticatedUserId || "unauthenticated"}: ${command.data}, Caught error:`,
+                e
+              );
+              break;
+            }
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "Data for add_ships must be a JSON string.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          if (!payload) break;
+          if (authenticatedUserId !== payload.indexPlayer) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText:
+                "Player ID mismatch. Cannot place ships for another player.",
+            } as ErrorResponseData;
+            console.warn(
+              `[Game] Player ID mismatch for add_ships. Authenticated: ${authenticatedUserId}, Payload: ${payload.indexPlayer}`
+            );
+            break;
+          }
+
+          const result = roomManager.addShipsToGame(payload);
+
+          if (result.success) {
+            console.log(
+              `[Game] Ships added for player ${payload.indexPlayer} in game ${payload.gameId}. Both players ready: ${result.bothPlayersReady}`
+            );
+            if (result.bothPlayersReady && result.room) {
+              roomToStartGame = result.room;
+            }
+
+            responseType = "";
+            responseData = {};
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: result.error || "Failed to add ships.",
+            } as ErrorResponseData;
+            console.warn(
+              `[Game] Failed to add ships for ${payload.indexPlayer} in game ${payload.gameId}: ${result.error}`
+            );
+          }
+          break;
+        }
+
         default:
           responseType = "error";
           responseData = {
@@ -372,6 +461,79 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
         }
       }
 
+      if (
+        roomToStartGame &&
+        roomToStartGame.gameId &&
+        roomToStartGame.players[0] &&
+        roomToStartGame.players[1] &&
+        roomToStartGame.gameData
+      ) {
+        console.log(`[Game] Preparing to start game ${roomToStartGame.gameId}`);
+        const player1Info = roomToStartGame.players[0];
+        const player2Info = roomToStartGame.players[1];
+        const firstPlayerId = player1Info.playerId;
+        roomToStartGame.currentPlayerTurn = firstPlayerId;
+        roomToStartGame.gameStarted = true;
+        roomManager.updateRoom(roomToStartGame);
+        const player1Ships =
+          roomToStartGame.gameData[player1Info.playerId]?.ships || [];
+        const player2Ships =
+          roomToStartGame.gameData[player2Info.playerId]?.ships || [];
+
+        const startGameDataP1: StartGameData = {
+          ships: player1Ships,
+          currentPlayerIndex: firstPlayerId,
+        };
+        const startGameDataP2: StartGameData = {
+          ships: player2Ships,
+          currentPlayerIndex: firstPlayerId,
+        };
+
+        const serverMessageStartP1: ServerMessage = {
+          type: "start_game",
+          data: JSON.stringify(startGameDataP1),
+          id: 0,
+        };
+        const serverMessageStartP2: ServerMessage = {
+          type: "start_game",
+          data: JSON.stringify(startGameDataP2),
+          id: 0,
+        };
+
+        const wsPlayer1 = userManager.getSocketByUserId(player1Info.playerId);
+        const wsPlayer2 = userManager.getSocketByUserId(player2Info.playerId);
+
+        if (wsPlayer1 && wsPlayer1.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer1.send(JSON.stringify(serverMessageStartP1));
+          console.log(
+            `[Game] Sent 'start_game' to player ${player1Info.playerId} for game ${roomToStartGame.gameId}`
+          );
+        }
+        if (wsPlayer2 && wsPlayer2.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer2.send(JSON.stringify(serverMessageStartP2));
+          console.log(
+            `[Game] Sent 'start_game' to player ${player2Info.playerId} for game ${roomToStartGame.gameId}`
+          );
+        }
+
+        const turnMessageData = { currentPlayer: firstPlayerId };
+        const turnServerMessage: ServerMessage = {
+          type: "turn",
+          data: JSON.stringify(turnMessageData),
+          id: 0,
+        };
+
+        if (wsPlayer1 && wsPlayer1.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer1.send(JSON.stringify(turnServerMessage));
+        }
+        if (wsPlayer2 && wsPlayer2.readyState === OriginalWebSocket.OPEN) {
+          wsPlayer2.send(JSON.stringify(turnServerMessage));
+        }
+        console.log(
+          `[Game] Sent first 'turn' for game ${roomToStartGame.gameId}. Current player: ${firstPlayerId}`
+        );
+      }
+
       if (requiresGlobalUpdate) {
         broadcast({
           type: "update_winners",
@@ -435,9 +597,7 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
         `Client ${extendedWs.clientIp} (unauthenticated) disconnected processing.`
       );
     }
-    // console.log(
-    //   `Client ${clientIp} disconnected. Needs full disconnect logic implemented.`
-    // );
+    console.log(`Client ${extendedWs.clientIp} disconnected.`);
   });
 
   ws.on("error", (error) => {

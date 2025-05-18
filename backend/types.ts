@@ -36,6 +36,12 @@ export interface RoomPlayerInfo {
 export interface GameRoom {
   roomId: string;
   players: [RoomPlayerInfo | null, RoomPlayerInfo | null];
+  gameId?: string;
+  gameData?: {
+    [playerId: string]: PlayerGameBoard;
+  };
+  currentPlayerTurn?: string;
+  gameStarted?: boolean;
 }
 
 export interface UpdateRoomData {
@@ -55,6 +61,34 @@ export interface AddUserToRoomPayload {
 export interface ExtendedWebSocket extends OriginalWebSocket {
   clientIpAddress: string;
   clientIp?: string;
-
   userId?: string;
+}
+
+export interface ShipPosition {
+  x: number;
+  y: number;
+}
+
+export interface Ship {
+  position: ShipPosition;
+  direction: boolean;
+  length: number;
+  type: "small" | "medium" | "large" | "huge";
+}
+
+export interface AddShipsPayload {
+  gameId: string;
+  ships: Ship[];
+  indexPlayer: string;
+}
+
+export interface PlayerGameBoard {
+  playerId: string;
+  ships: Ship[];
+  shipsPlaced: boolean;
+}
+
+export interface StartGameData {
+  ships: Ship[];
+  currentPlayerIndex: string;
 }
