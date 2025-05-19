@@ -987,28 +987,78 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
   });
 
   ws.on("close", () => {
-    console.log(`Client ${extendedWs.clientIp} disconnected.`);
-    const { disconnectedUserName } = userManager.handleUserDisconnect(ws);
-    if (disconnectedUserName) {
+    const disconnectedPlayerId = extendedWs.userId;
+
+    console.log(
+      `Client ${extendedWs.clientIpAddress || extendedWs.clientIp} (User ID: ${disconnectedPlayerId || "N/A"}) disconnected.`
+    );
+    const { disconnectedUserName } =
+      userManager.handleUserDisconnect(extendedWs);
+
+    let requiresWinnersUpdateOnClose = false;
+    let requiresRoomUpdateOnClose = false;
+
+    if (disconnectedPlayerId && disconnectedUserName) {
       console.log(
-        `User ${disconnectedUserName} (${extendedWs.clientIp}) actions on disconnect processed.`
+        `User ${disconnectedUserName} (ID: ${disconnectedPlayerId}) was authenticated. Processing game/room leave.`
       );
+
+      const leaveResult = roomManager.handlePlayerLeft(disconnectedPlayerId);
+
+      if (leaveResult.roomChanged) {
+        requiresRoomUpdateOnClose = true;
+        console.log(
+          `[Game] Room ${leaveResult.finishedRoomId} state changed due to player ${disconnectedPlayerId} leaving.`
+        );
+        if (leaveResult.remainingPlayerId && leaveResult.gameIdOfFinishedGame) {
+          console.log(
+            `[Game] Player ${leaveResult.remainingPlayerId} wins game ${leaveResult.gameIdOfFinishedGame} by default.`
+          );
+          userManager.addWinToUser(leaveResult.remainingPlayerId);
+          requiresWinnersUpdateOnClose = true;
+
+          const wsRemainingPlayer = userManager.getSocketByUserId(
+            leaveResult.remainingPlayerId
+          );
+          if (
+            wsRemainingPlayer &&
+            wsRemainingPlayer.readyState === OriginalWebSocket.OPEN
+          ) {
+            const finishData: FinishData = {
+              winPlayer: leaveResult.remainingPlayerId,
+            };
+            const finishMessage: ServerMessage = {
+              type: "finish",
+              data: JSON.stringify(finishData),
+              id: 0,
+            };
+            wsRemainingPlayer.send(JSON.stringify(finishMessage));
+            console.log(
+              `[Game] Sent 'finish' to winner ${leaveResult.remainingPlayerId} for game ${leaveResult.gameIdOfFinishedGame}.`
+            );
+          }
+        }
+      }
+    } else {
+      console.log(
+        `Client ${extendedWs.clientIpAddress || extendedWs.clientIp} (unauthenticated) disconnected processing.`
+      );
+    }
+
+    if (requiresWinnersUpdateOnClose) {
       broadcast({
         type: "update_winners",
         data: userManager.getWinnersList(),
         id: 0,
       });
+    }
+    if (disconnectedPlayerId || requiresRoomUpdateOnClose) {
       broadcast({
         type: "update_room",
         data: roomManager.getAvailableRooms(),
         id: 0,
       });
-    } else {
-      console.log(
-        `Client ${extendedWs.clientIp} (unauthenticated) disconnected processing.`
-      );
     }
-    console.log(`Client ${extendedWs.clientIp} disconnected.`);
   });
 
   ws.on("error", (error) => {
