@@ -5,6 +5,9 @@ import {
   GameRoom,
   UpdateRoomData,
   AddShipsPayload,
+  Ship,
+  ShipPosition,
+  HandleAttackResult,
 } from "../types.js";
 
 const rooms = new Map<string, GameRoom>();
@@ -19,7 +22,7 @@ export function createRoomPlayer(
   };
 }
 
-function findRoomByGameId(gameIdToFind: string): GameRoom | undefined {
+export function findRoomByGameId(gameIdToFind: string): GameRoom | undefined {
   for (const room of rooms.values()) {
     if (room.gameId === gameIdToFind) {
       return room;
@@ -160,10 +163,17 @@ export function addShipsToGame(payload: AddShipsPayload): {
     return { success: false, error: "Ships already placed for this player." };
   }
 
+  const processedShips: Ship[] = payload.ships.map((clientShip) => ({
+    ...clientShip,
+    hits: new Array(clientShip.length).fill(false),
+    isSunk: false,
+  }));
+
   room.gameData[payload.indexPlayer] = {
     playerId: payload.indexPlayer,
-    ships: payload.ships,
+    ships: processedShips,
     shipsPlaced: true,
+    shotsFired: new Map<string, "miss" | "shot">(),
   };
   console.log(
     `[GameManager] Ships placed for player ${payload.indexPlayer} in game ${payload.gameId}`
@@ -195,4 +205,191 @@ export function updateRoom(roomToUpdate: GameRoom): void {
       `[RoomManager] Attempted to update non-existent room ${roomToUpdate.roomId}.`
     );
   }
+}
+
+export function handleAttack(
+  gameId: string,
+  attackingPlayerId: string,
+  x: number,
+  y: number
+): { success: boolean; error?: string; result?: HandleAttackResult } {
+  const room = findRoomByGameId(gameId);
+
+  if (
+    !room ||
+    !room.gameId ||
+    !room.gameData ||
+    !room.players[0] ||
+    !room.players[1]
+  ) {
+    return {
+      success: false,
+      error: "Game not found or not properly initialized.",
+    };
+  }
+
+  if (room.currentPlayerTurn !== attackingPlayerId) {
+    return { success: false, error: "Not your turn." };
+  }
+
+  const defendingPlayerId =
+    room.players[0].playerId === attackingPlayerId
+      ? room.players[1].playerId
+      : room.players[0].playerId;
+
+  const defendingPlayerBoard = room.gameData[defendingPlayerId];
+
+  if (!defendingPlayerBoard) {
+    return { success: false, error: "Defending player's board not found." };
+  }
+
+  const shotCoordinateKey = `${x}_${y}`;
+
+  if (defendingPlayerBoard.shotsFired.has(shotCoordinateKey)) {
+    return { success: false, error: "This cell has already been shot at." };
+  }
+
+  let attackStatus: "miss" | "shot" | "killed" = "miss";
+  let sunkShip: Ship | undefined = undefined;
+  let cellsAroundSunkShip: ShipPosition[] = [];
+
+  for (let i = 0; i < defendingPlayerBoard.ships.length; i++) {
+    const ship = defendingPlayerBoard.ships[i];
+    if (ship.isSunk) continue;
+
+    for (let j = 0; j < ship.length; j++) {
+      let currentX = ship.position.x;
+      let currentY = ship.position.y;
+
+      if (ship.direction) {
+        currentY += j;
+      } else {
+        currentX += j;
+      }
+
+      if (currentX === x && currentY === y) {
+        if (!ship.hits[j]) {
+          ship.hits[j] = true;
+          attackStatus = "shot";
+          if (ship.hits.every((hit) => hit === true)) {
+            attackStatus = "killed";
+            ship.isSunk = true;
+            sunkShip = JSON.parse(JSON.stringify(ship)) as Ship;
+            console.log(
+              `[Game] Ship sunk! Player: ${defendingPlayerId}, Type: ${ship.type}, Pos: (${ship.position.x},${ship.position.y})`
+            );
+            cellsAroundSunkShip = getCellsAroundShip(ship);
+          }
+          break;
+        } else {
+          attackStatus = "shot";
+          break;
+        }
+      }
+    }
+    if (attackStatus === "shot" || attackStatus === "killed") {
+      break;
+    }
+  }
+
+  defendingPlayerBoard.shotsFired.set(
+    shotCoordinateKey,
+    attackStatus === "miss" ? "miss" : "shot"
+  );
+
+  if (sunkShip) {
+    cellsAroundSunkShip.forEach((pos) => {
+      const key = `${pos.x}_${pos.y}`;
+      if (!defendingPlayerBoard.shotsFired.has(key)) {
+        let isPartOfSunkShip = false;
+        for (let k = 0; k < sunkShip.length; k++) {
+          let sx = sunkShip.position.x;
+          let sy = sunkShip.position.y;
+          if (sunkShip.direction) sy += k;
+          else sx += k;
+          if (pos.x === sx && pos.y === sy) {
+            isPartOfSunkShip = true;
+            break;
+          }
+        }
+        if (!isPartOfSunkShip) {
+          defendingPlayerBoard.shotsFired.set(key, "miss");
+        }
+      }
+    });
+  }
+
+  let isGameOver = false;
+  let winnerId: string | undefined = undefined;
+  if (attackStatus === "killed") {
+    const allShipsSunk = defendingPlayerBoard.ships.every(
+      (ship) => ship.isSunk
+    );
+    if (allShipsSunk) {
+      isGameOver = true;
+      winnerId = attackingPlayerId;
+      console.log(`[Game] Game Over! Winner: ${winnerId} in game ${gameId}`);
+      room.currentPlayerTurn = undefined;
+      room.gameStarted = false;
+    }
+  }
+
+  if (!isGameOver) {
+    if (attackStatus === "miss") {
+      room.currentPlayerTurn = defendingPlayerId;
+    } else {
+      room.currentPlayerTurn = attackingPlayerId;
+    }
+  }
+
+  rooms.set(room.roomId, room);
+
+  return {
+    success: true,
+    result: {
+      position: { x, y },
+      attackingPlayerId: attackingPlayerId,
+      status: attackStatus,
+      isGameOver,
+      winnerId,
+      sunkShip,
+      cellsAroundSunkShip: sunkShip ? cellsAroundSunkShip : [],
+    },
+  };
+}
+
+function getCellsAroundShip(ship: Ship): ShipPosition[] {
+  const cells: ShipPosition[] = [];
+  const shipCells: ShipPosition[] = [];
+
+  for (let i = 0; i < ship.length; i++) {
+    let x = ship.position.x;
+    let y = ship.position.y;
+    if (ship.direction) {
+      y += i;
+    } else {
+      x += i;
+    }
+    shipCells.push({ x, y });
+  }
+
+  shipCells.forEach((cell) => {
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        if (dx === 0 && dy === 0) continue;
+
+        const adjX = cell.x + dx;
+        const adjY = cell.y + dy;
+
+        if (adjX >= 0 && adjX <= 9 && adjY >= 0 && adjY <= 9) {
+          if (!shipCells.some((sc) => sc.x === adjX && sc.y === adjY)) {
+            if (!cells.some((c) => c.x === adjX && c.y === adjY)) {
+              cells.push({ x: adjX, y: adjY });
+            }
+          }
+        }
+      }
+    }
+  });
+  return cells;
 }

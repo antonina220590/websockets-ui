@@ -1,6 +1,7 @@
 import {
   AddShipsPayload,
   AddUserToRoomPayload,
+  AttackPayload,
   ClientCommand,
   RegPayload,
   Ship,
@@ -76,4 +77,17 @@ export function isAddShipsPayload(data: unknown): data is AddShipsPayload {
     return payload.ships.every((ship) => isShip(ship));
   }
   return false;
+}
+
+export function isAttackPayload(data: unknown): data is AttackPayload {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const payload = data as AttackPayload;
+  return (
+    typeof payload.gameId === "string" &&
+    typeof payload.indexPlayer === "string" &&
+    typeof payload.x === "number" &&
+    typeof payload.y === "number"
+  );
 }

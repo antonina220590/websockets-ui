@@ -74,6 +74,8 @@ export interface Ship {
   direction: boolean;
   length: number;
   type: "small" | "medium" | "large" | "huge";
+  hits: boolean[];
+  isSunk: boolean;
 }
 
 export interface AddShipsPayload {
@@ -86,9 +88,41 @@ export interface PlayerGameBoard {
   playerId: string;
   ships: Ship[];
   shipsPlaced: boolean;
+  shotsFired: Map<string, "miss" | "shot">;
 }
 
 export interface StartGameData {
   ships: Ship[];
   currentPlayerIndex: string;
+}
+
+export interface AttackPayload {
+  gameId: string;
+  x: number;
+  y: number;
+  indexPlayer: string;
+}
+
+export interface AttackResponseData {
+  position: ShipPosition;
+  currentPlayer: string;
+  status: "miss" | "shot" | "killed";
+}
+
+export interface TurnData {
+  currentPlayer: string;
+}
+
+export interface FinishData {
+  winPlayer: string;
+}
+
+export interface HandleAttackResult {
+  status: "miss" | "shot" | "killed";
+  position: ShipPosition;
+  attackingPlayerId: string;
+  isGameOver: boolean;
+  winnerId?: string;
+  sunkShip?: Ship;
+  cellsAroundSunkShip?: ShipPosition[];
 }

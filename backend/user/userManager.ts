@@ -131,3 +131,19 @@ export function getUserById(userId: string): User | undefined {
 export function getSocketByUserId(userId: string): WebSocket | undefined {
   return activeConnections.get(userId);
 }
+
+export function addWinToUser(userId: string): boolean {
+  const user = users.get(userId);
+  if (user) {
+    user.wins += 1;
+    users.set(userId, user);
+    console.log(
+      `[UserManager] User ${user.name} (ID: ${userId}) now has ${user.wins} wins.`
+    );
+    return true;
+  }
+  console.warn(
+    `[UserManager] Attempted to add win to non-existent user ${userId}.`
+  );
+  return false;
+}
