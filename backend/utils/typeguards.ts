@@ -3,6 +3,7 @@ import {
   AddUserToRoomPayload,
   AttackPayload,
   ClientCommand,
+  RandomAttackPayload,
   RegPayload,
   Ship,
   ShipPosition,
@@ -89,5 +90,18 @@ export function isAttackPayload(data: unknown): data is AttackPayload {
     typeof payload.indexPlayer === "string" &&
     typeof payload.x === "number" &&
     typeof payload.y === "number"
+  );
+}
+
+export function isRandomAttackPayload(
+  data: unknown
+): data is RandomAttackPayload {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const payload = data as RandomAttackPayload;
+  return (
+    typeof payload.gameId === "string" &&
+    typeof payload.indexPlayer === "string"
   );
 }

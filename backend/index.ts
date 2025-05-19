@@ -15,6 +15,7 @@ import {
   TurnData,
   AttackResponseData,
   AttackPayload,
+  RandomAttackPayload,
 } from "./types.js";
 import * as userManager from "./user/userManager.js";
 import * as roomManager from "./room/roomManager.js";
@@ -24,6 +25,7 @@ import {
   isValidClientCommandStructure,
   isAddShipsPayload,
   isAttackPayload,
+  isRandomAttackPayload,
 } from "./utils/typeguards.js";
 import { IncomingMessage } from "http";
 
@@ -533,6 +535,169 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
             console.warn(
               `[Game] Failed to process attack for ${payload.indexPlayer} in game ${payload.gameId}: ${attackOutcome.error}`
             );
+            const roomBeforeInvalidAttack = roomManager.findRoomByGameId(
+              payload.gameId
+            );
+            attackResultsForRoom = {
+              gameId: payload.gameId,
+              messages: [],
+              nextPlayerId: roomBeforeInvalidAttack?.currentPlayerTurn,
+              gameOver: false,
+              winnerId: undefined,
+            };
+          }
+          break;
+        }
+
+        case "randomAttack": {
+          // НОВЫЙ CASE
+          if (!authenticatedUserId) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "User is not authenticated.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          let payload: RandomAttackPayload | undefined;
+          if (typeof command.data === "string") {
+            try {
+              const parsedData: unknown = JSON.parse(command.data);
+              if (isRandomAttackPayload(parsedData)) {
+                payload = parsedData;
+              } else {
+                throw new Error("Invalid payload structure for randomAttack.");
+              }
+            } catch (e: unknown) {
+              responseType = "error";
+              let errorMessage =
+                "Invalid JSON or payload for randomAttack data.";
+              if (e instanceof Error) {
+                errorMessage = `Invalid JSON or payload for randomAttack data: ${e.message}`;
+              } else if (typeof e === "string") {
+                errorMessage = `Invalid JSON or payload for randomAttack data: ${e}`;
+              }
+              responseData = {
+                error: true,
+                errorText: errorMessage,
+              } as ErrorResponseData;
+              console.warn(
+                `[Game] Invalid data for randomAttack from ${authenticatedUserId}: ${command.data}, Caught error:`,
+                e
+              );
+              break;
+            }
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText: "Data for randomAttack must be a JSON string.",
+            } as ErrorResponseData;
+            break;
+          }
+
+          if (!payload) {
+            if (responseType !== "error") {
+              responseType = "error";
+              responseData = {
+                error: true,
+                errorText: "Failed to parse randomAttack payload.",
+              } as ErrorResponseData;
+            }
+            break;
+          }
+
+          if (authenticatedUserId !== payload.indexPlayer) {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText:
+                "Player ID mismatch. Cannot perform randomAttack for another player.",
+            } as ErrorResponseData;
+            console.warn(
+              `[Game] Player ID mismatch for randomAttack. Authenticated: ${authenticatedUserId}, Payload: ${payload.indexPlayer}`
+            );
+            break;
+          }
+
+          const attackOutcome = roomManager.handleRandomAttack(
+            payload.gameId,
+            payload.indexPlayer
+          );
+
+          if (attackOutcome.success && attackOutcome.result) {
+            const { result } = attackOutcome;
+            const messagesToSend: ServerMessage[] = [];
+            const mainAttackResponseData: AttackResponseData = {
+              position: result.position,
+              currentPlayer: result.attackingPlayerId,
+              status: result.status,
+            };
+            messagesToSend.push({
+              type: "attack",
+              data: JSON.stringify(mainAttackResponseData),
+              id: 0,
+            });
+            if (
+              result.status === "killed" &&
+              result.cellsAroundSunkShip &&
+              result.cellsAroundSunkShip.length > 0
+            ) {
+              result.cellsAroundSunkShip.forEach((missPos) => {
+                const missResponseData: AttackResponseData = {
+                  position: missPos,
+                  currentPlayer: result.attackingPlayerId,
+                  status: "miss",
+                };
+                messagesToSend.push({
+                  type: "attack",
+                  data: JSON.stringify(missResponseData),
+                  id: 0,
+                });
+              });
+            }
+
+            const currentRoomState = roomManager.findRoomByGameId(
+              payload.gameId
+            );
+            attackResultsForRoom = {
+              gameId: payload.gameId,
+              messages: messagesToSend,
+              nextPlayerId: currentRoomState?.currentPlayerTurn,
+              gameOver: result.isGameOver,
+              winnerId: result.winnerId,
+            };
+
+            if (result.isGameOver && result.winnerId) {
+              const winAdded = userManager.addWinToUser(result.winnerId);
+              if (winAdded)
+                console.log(
+                  `[Game] Win recorded for player ${result.winnerId}`
+                );
+              requiresGlobalUpdate = true;
+              requiresGlobalRoomUpdate = true;
+            }
+          } else {
+            responseType = "error";
+            responseData = {
+              error: true,
+              errorText:
+                attackOutcome.error || "Failed to process randomAttack.",
+            } as ErrorResponseData;
+            console.warn(
+              `[Game] Failed to process randomAttack for ${payload.indexPlayer} in game ${payload.gameId}: ${attackOutcome.error}`
+            );
+            const roomBeforeInvalidAttack = roomManager.findRoomByGameId(
+              payload.gameId
+            );
+            attackResultsForRoom = {
+              gameId: payload.gameId,
+              messages: [],
+              nextPlayerId: roomBeforeInvalidAttack?.currentPlayerTurn,
+              gameOver: false,
+              winnerId: undefined,
+            };
           }
           break;
         }
@@ -568,10 +733,10 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
           data: JSON.stringify(responseData),
           id: 0,
         };
-        extendedWs.send(JSON.stringify(finalResponse));
         console.log(
-          `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data.substring(0, 100)}..., Client: ${extendedWs.clientIpAddress}`
+          `[RESPONSE SENT] Type: ${finalResponse.type}, Data: ${finalResponse.data.substring(0, 100)}..., Client: ${extendedWs.clientIpAddress}` // ИЛИ extendedWs.clientIp
         );
+        extendedWs.send(JSON.stringify(finalResponse));
       }
 
       if (
@@ -695,10 +860,11 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
         );
       }
 
-      if (attackResultsForRoom && attackResultsForRoom.messages.length > 0) {
+      if (attackResultsForRoom) {
         const currentRoom = roomManager.findRoomByGameId(
           attackResultsForRoom.gameId
         );
+
         if (currentRoom && currentRoom.players[0] && currentRoom.players[1]) {
           const wsP1 = userManager.getSocketByUserId(
             currentRoom.players[0].playerId
@@ -707,17 +873,20 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
             currentRoom.players[1].playerId
           );
 
-          attackResultsForRoom.messages.forEach((msg) => {
-            const msgString = JSON.stringify(msg);
-            if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN)
-              wsP1.send(msgString);
-            if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN)
-              wsP2.send(msgString);
-          });
-          console.log(
-            `[Game] Sent ${attackResultsForRoom.messages.length} attack result message(s) to room ${currentRoom.roomId}`
-          );
-
+          if (attackResultsForRoom.messages.length > 0) {
+            attackResultsForRoom.messages.forEach((msg) => {
+              const msgString = JSON.stringify(msg);
+              if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN) {
+                wsP1.send(msgString);
+              }
+              if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN) {
+                wsP2.send(msgString);
+              }
+            });
+            console.log(
+              `[Game] Sent ${attackResultsForRoom.messages.length} attack result message(s) to room ${currentRoom.roomId}`
+            );
+          }
           if (
             !attackResultsForRoom.gameOver &&
             attackResultsForRoom.nextPlayerId
@@ -731,10 +900,12 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
               id: 0,
             };
             const turnMsgString = JSON.stringify(turnMessage);
-            if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN)
+            if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN) {
               wsP1.send(turnMsgString);
-            if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN)
+            }
+            if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN) {
               wsP2.send(turnMsgString);
+            }
             console.log(
               `[Game] Sent 'turn'. Current player: ${attackResultsForRoom.nextPlayerId} in room ${currentRoom.roomId}`
             );
@@ -751,14 +922,26 @@ wss.on("connection", (ws: OriginalWebSocket, request: IncomingMessage) => {
               id: 0,
             };
             const finishMsgString = JSON.stringify(finishMessage);
-            if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN)
+            if (wsP1 && wsP1.readyState === OriginalWebSocket.OPEN) {
               wsP1.send(finishMsgString);
-            if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN)
+            }
+            if (wsP2 && wsP2.readyState === OriginalWebSocket.OPEN) {
               wsP2.send(finishMsgString);
+            }
             console.log(
               `[Game] Sent 'finish'. Winner: ${attackResultsForRoom.winnerId} in room ${currentRoom.roomId}`
             );
+            const removed = roomManager.removeRoom(currentRoom.roomId);
+            if (removed) {
+              console.log(
+                `[Game] Room ${currentRoom.roomId} processed for removal after game finish.`
+              );
+            }
           }
+        } else {
+          console.warn(
+            `[Game] Could not find room or players for gameId ${attackResultsForRoom.gameId} to send attack results.`
+          );
         }
       }
 

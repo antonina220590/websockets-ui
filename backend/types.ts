@@ -126,3 +126,8 @@ export interface HandleAttackResult {
   sunkShip?: Ship;
   cellsAroundSunkShip?: ShipPosition[];
 }
+
+export interface RandomAttackPayload {
+  gameId: string;
+  indexPlayer: string;
+}

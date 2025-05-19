@@ -8,6 +8,7 @@ import {
   Ship,
   ShipPosition,
   HandleAttackResult,
+  PlayerGameBoard,
 } from "../types.js";
 
 const rooms = new Map<string, GameRoom>();
@@ -392,4 +393,146 @@ function getCellsAroundShip(ship: Ship): ShipPosition[] {
     }
   });
   return cells;
+}
+
+function getRandomAvailableShot(board: PlayerGameBoard): ShipPosition | null {
+  const availableCells: ShipPosition[] = [];
+  for (let y = 0; y < 10; y++) {
+    for (let x = 0; x < 10; x++) {
+      if (!board.shotsFired.has(`<span class="math-inline">{x}\\_</span>{y}`)) {
+        availableCells.push({ x, y });
+      }
+    }
+  }
+
+  if (availableCells.length === 0) {
+    return null;
+  }
+
+  const randomIndex = Math.floor(Math.random() * availableCells.length);
+  return availableCells[randomIndex];
+}
+
+export function handleRandomAttack(
+  gameId: string,
+  attackingPlayerId: string
+): { success: boolean; error?: string; result?: HandleAttackResult } {
+  const room = findRoomByGameId(gameId);
+
+  if (
+    !room ||
+    !room.gameId ||
+    !room.gameData ||
+    !room.players[0] ||
+    !room.players[1]
+  ) {
+    return {
+      success: false,
+      error: "Game not found or not properly initialized.",
+    };
+  }
+
+  if (room.currentPlayerTurn !== attackingPlayerId) {
+    return { success: false, error: "Not your turn." };
+  }
+
+  const defendingPlayerId =
+    room.players[0].playerId === attackingPlayerId
+      ? room.players[1].playerId
+      : room.players[0].playerId;
+
+  const defendingPlayerBoard = room.gameData[defendingPlayerId];
+
+  if (!defendingPlayerBoard) {
+    return { success: false, error: "Defending player's board not found." };
+  }
+
+  const randomShotPosition = getRandomAvailableShot(defendingPlayerBoard);
+
+  if (!randomShotPosition) {
+    return {
+      success: false,
+      error: "No available cells to shoot at (all cells already shot).",
+    };
+  }
+
+  console.log(
+    `[GameManager] Random attack by ${attackingPlayerId} at (${randomShotPosition.x},${randomShotPosition.y}) in game ${gameId}`
+  );
+
+  return handleAttack(
+    gameId,
+    attackingPlayerId,
+    randomShotPosition.x,
+    randomShotPosition.y
+  );
+}
+
+export function removeRoom(roomId: string): boolean {
+  if (rooms.has(roomId)) {
+    rooms.delete(roomId);
+    console.log(`[RoomManager] Room ${roomId} removed.`);
+    return true;
+  }
+  console.warn(
+    `[RoomManager] Attempted to remove non-existent room ${roomId}.`
+  );
+  return false;
+}
+
+export function handlePlayerLeft(disconnectingPlayerId: string): {
+  roomChanged: boolean;
+  remainingPlayerId?: string;
+  gameIdOfFinishedGame?: string;
+  finishedRoomId?: string;
+} {
+  let roomChanged = false;
+  let remainingPlayerId: string | undefined;
+  let gameIdOfFinishedGame: string | undefined;
+  let finishedRoomId: string | undefined;
+
+  for (const [roomId, room] of rooms.entries()) {
+    const playerIndex = room.players.findIndex(
+      (p) => p?.playerId === disconnectingPlayerId
+    );
+
+    if (playerIndex !== -1) {
+      finishedRoomId = roomId;
+      gameIdOfFinishedGame = room.gameId;
+
+      if (room.gameStarted && room.players[0] && room.players[1]) {
+        console.log(
+          `[RoomManager] Player ${disconnectingPlayerId} left an active game ${room.gameId} in room ${roomId}.`
+        );
+        remainingPlayerId =
+          playerIndex === 0
+            ? room.players[1].playerId
+            : room.players[0].playerId;
+        room.gameStarted = false;
+        room.currentPlayerTurn = undefined;
+      } else {
+        const otherPlayerIndex = playerIndex === 0 ? 1 : 0;
+        if (room.players[otherPlayerIndex] === null) {
+          console.log(
+            `[RoomManager] Player ${disconnectingPlayerId} left room ${roomId} (was alone). Room removed.`
+          );
+        } else {
+          console.log(
+            `[RoomManager] Player ${disconnectingPlayerId} left room ${roomId} before game started. Room removed.`
+          );
+        }
+      }
+      if (removeRoom(roomId)) {
+        roomChanged = true;
+      }
+      break;
+    }
+  }
+
+  return {
+    roomChanged,
+    remainingPlayerId,
+    gameIdOfFinishedGame,
+    finishedRoomId,
+  };
 }
