@@ -1,21 +1,32 @@
 {
-    "name": "ws_task",
-    "version": "1.0.0",
-    "description": "Template for the WebSocket remote control task",
-    "main": "index.js",
-    "type": "module",
-    "scripts": {
-        "start": "node ./index.js",
-        "start:dev": "nodemon ./index.js",
-        "test": "echo \"Error: no test specified\" && exit 1"
-    },
-    "author": "Andrei Auchynnikau",
-    "keywords": [],
-    "license": "ISC",
-    "devDependencies": {
-        "nodemon": "^2.0.16"
-    },
-    "dependencies": {
-        "ws": "^8.8.0"
-    }
+  "name": "ws_task",
+  "version": "1.0.0",
+  "description": "Template for the WebSocket remote control task",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "tsx ./backend/index.ts",
+    "start:dev": "tsx watch ./backend/index.ts",
+    "start:front": "node ./index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "lint": "eslint ./backend/**/*.ts",
+    "lint:fix": "eslint ./backend/**/*.ts --fix"
+  },
+  "author": "Antonina Tyurina",
+  "keywords": [],
+  "license": "ISC",
+  "devDependencies": {
+    "@types/node": "^22.15.18",
+    "@types/ws": "^8.18.1",
+    "@typescript-eslint/eslint-plugin": "^8.32.1",
+    "@typescript-eslint/parser": "^8.32.1",
+    "eslint": "^9.26.0",
+    "nodemon": "^2.0.16",
+    "tsx": "^4.19.4",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.32.1"
+  },
+  "dependencies": {
+    "ws": "^8.8.0"
+  }
 }
